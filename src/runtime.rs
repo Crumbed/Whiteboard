@@ -1,9 +1,19 @@
 use std::{fmt::Display, collections::HashMap};
 
-use crate::error;
+use crate::{error, parser::AstNode, interpreter::{Program, VAR_LITERALS}};
 
 
 
+
+
+
+pub union IntOrFloat {
+    pub int: i32,
+    pub float: f64
+}
+
+#[allow(non_camel_case_types)]
+type Type_Id = (DataType, String);
 
 #[derive(Debug, Clone)]
 pub enum RuntimeValue {
@@ -14,11 +24,13 @@ pub enum RuntimeValue {
     Object { name: String, properties: HashMap<String, RuntimeValue> }, 
     Array { data_type: DataType, length: usize, arr: Vec<RuntimeValue> },
 
-    Function { id: String, args: Vec<String>, body: Vec<AstNode> }, 
-    Struct { id: String, properties: Vec<(String, String)> },
+    Function { id: String, args: Vec<Type_Id>, rtrn_t: DataType, body: Vec<AstNode> }, 
+    Struct { id: String, properties: Vec<Type_Id> },
     Void,
     TypeSpecifier(DataType),
     Return(Box<RuntimeValue>), 
+    Call { kind: ScopeKind, nodes: Vec<AstNode> },
+    VarReferance(u64),
 }
 
 #[derive(Debug, Clone)]
@@ -30,7 +42,7 @@ pub enum DataType {
     Object(String),
     Array(Box<DataType>),
     Function(String),
-    Void
+    Void,
 }
 
 impl DataType {
@@ -90,7 +102,7 @@ impl Display for DataType {
             Object(name) => write!(f, "{}", name),
             Array(t) => write!(f, "{}", *t),
             Function(name) => write!(f, "{}", name),
-            Void => write!(f, "void")
+            Void => write!(f, "void"),
         }
     }
 }
@@ -98,22 +110,34 @@ impl Display for DataType {
 impl RuntimeValue {
     pub fn get_type(&self) -> DataType {
         use RuntimeValue::*;
-        use DataType::*;
         
         match self {
-            Int(_) => Int,
-            Float(_) => Float,
-            Bool(_) => Bool,
-            Char(_) => Char,
-            Object { name, ..} => Object(name.to_string()),
-            Array { data_type, ..} => Array(Box::new(data_type)),
-            Function { id, ..} => Function(id.to_string()),
-            Struct { id, ..} => Object(id.to_string()),
+            Int(_) => DataType::Int,
+            Float(_) => DataType::Float,
+            Bool(_) => DataType::Bool,
+            Char(_) => DataType::Char,
+            Object { name, ..} => DataType::Object(name.to_string()),
+            Array { data_type, ..} => DataType::Array(Box::new(data_type.clone())),
+            Function { id, ..} => DataType::Function(id.to_string()),
+            Struct { id, ..} => DataType::Object(id.to_string()),
             Void => DataType::Void,
             TypeSpecifier(data_type) => data_type.clone(),
             Return(node) => (*node).get_type(),
+            Call {..} => DataType::Void,
+            VarReferance(ptr) => unsafe {
+                let var_p = *ptr as *const Var;
+                let var = &*var_p;
+                var.d_type.clone()
+            },
         }
     } 
+    pub fn get_int_or_float(&self) -> IntOrFloat {
+        match self {
+            RuntimeValue::Int(v) => IntOrFloat { int: *v },
+            RuntimeValue::Float(v) => IntOrFloat { float: *v },
+            _ => { error("Not int or float"); IntOrFloat{int:0} }
+        }
+    }
 }
 
 impl Display for RuntimeValue {
@@ -145,7 +169,13 @@ impl Display for RuntimeValue {
             Void => write!(f, "void"),
             Function { id, ..} => write!(f, "id: {id}"),
             TypeSpecifier(d_type) => write!(f, "{}", d_type),
-            Return(value) => write!(f, "{}", *value)
+            Return(value) => write!(f, "{}", *value),
+            Call{..} => write!(f, "void"),
+            VarReferance(ptr) => unsafe {
+                let var_p = *ptr as *const Var;
+                let var = &*var_p;
+                write!(f, "{}", var.value)
+            }
         }
     }
 }
@@ -165,6 +195,13 @@ impl PartialEq for RuntimeValue {
             (Struct{id: n1, ..}, Struct{id: n2, ..}) => n1 == n2,
             (Void, Void) => true,
             (TypeSpecifier(t1), TypeSpecifier(t2)) => t1 == t2,
+            (VarReferance(ptr1), VarReferance(ptr2)) => unsafe {
+                let var1_p = *ptr1 as *const Var;
+                let var2_p = *ptr2 as *const Var;
+                let var1 = &*var1_p;
+                let var2 = &*var2_p;
+                return var1.value == var2.value;
+            }
             _ => false,
         }
     }
@@ -180,11 +217,11 @@ pub struct Var {
     pub constant  :    bool
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ScopeKind {
     Program,
     Module,
-    Function,
+    Function { rtrn_t: DataType, args: Vec<Type_Id>, passed: Vec<AstNode> },
     IfBlock,
 }
 impl PartialEq for ScopeKind {
@@ -194,7 +231,7 @@ impl PartialEq for ScopeKind {
         match (self, other) {
             (Program, Program) => true,
             (Module, Module) => true,
-            (Function, Function) => true,
+            (Function{..}, Function{..}) => true,
             (IfBlock, IfBlock) => true,
             _ => false,
         }
@@ -202,7 +239,7 @@ impl PartialEq for ScopeKind {
 }
 
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Env {
     kind    :    ScopeKind,
     vars    :    HashMap<String, Var>,
@@ -211,8 +248,8 @@ pub struct Env {
 impl Env {
     pub fn new (parent: Option<&mut Env>, kind: ScopeKind) -> Self {
         let parent_p = match parent {
-            Some(&mut env) => env as *const Env as u64,
-            Non => 0 as u64
+            Some(env) => env as *const Env as u64,
+            None => 0 as u64
         };
         return Env {
             kind,
@@ -224,7 +261,7 @@ impl Env {
 
 impl Env {
     pub fn declare_var(&mut self, var_id: &str, var_data: &RuntimeValue) {
-        if self.vars.contains(var_id) { error(&format!(
+        if self.vars.contains_key(var_id) { error(&format!(
             "Cannot declare {}, as it already exists", var_id )); }
         if ["int", "float", "bool", "char", "Object"].contains(&var_id) { error(&format!(
             "cannot declare {} as it is a reserved type specifier", var_id)); }
@@ -251,6 +288,23 @@ impl Env {
 
             return;
         }
+        if let ScopeKind::Function {..} = self.kind { unsafe {
+            if VAR_LITERALS.unwrap().contains_key(var_id) {
+                let ptr = VAR_LITERALS
+                    .unwrap()
+                    .get(var_id)
+                    .unwrap().clone();
+                let var_p = ptr as *mut Var;
+                let var = &mut *var_p;
+
+                if var.d_type != var_data.get_type() { error(&format!(
+                    "Incompatible types {} and {}, {} expected type {}",
+                    var.d_type, var_data.get_type(), var_id, var.d_type
+                )); }
+                var.value = var_data.clone();
+                return;
+            }
+        }}
         if ["int", "float", "bool", "char", "Object"].contains(&var_id) { error(&format!(
             "cannot assign {} as it is a reserved type specifier", var_id)); }
 
@@ -264,6 +318,18 @@ impl Env {
     }
     pub fn get_var(&mut self, var_id: &str) -> RuntimeValue {
         if self.vars.contains_key(var_id) { return self.vars.get(var_id).unwrap().value.clone(); }
+        if let ScopeKind::Function {..} = self.kind { unsafe {
+            if VAR_LITERALS.unwrap().contains_key(var_id) {
+                let ptr = *VAR_LITERALS
+                    .unwrap()
+                    .get(var_id)
+                    .unwrap();
+                let var_p = ptr as *const Var;
+                let var = &*var_p;
+                return var.value.clone();
+            }
+        }}
+            
 
         match var_id {
             "int" => return RuntimeValue::TypeSpecifier(DataType::Int),
@@ -286,12 +352,32 @@ impl Env {
         if self.vars.contains_key(var_id) { return true; }
         if ["int", "float", "bool", "char", "Object"].contains(&var_id) { return true; }
 
-        if self.parent_p == 0 { return false; }
+        // changed from recursive calls to iterative because of stack overflow errors
+        let mut parent_p = self.parent_p;
         unsafe {
-            let env_p = self.parent_p as *const Env as *mut Env;
+            while parent_p != 0 {
+                let env_p = self.parent_p as *const Env as *mut Env;
+                let env = &mut *env_p;
+
+                if env.vars.contains_key(var_id) { return true; }
+                if ["int", "float", "bool", "char", "Object"].contains(&var_id) { return true; }
+                parent_p = env.parent_p;
+            }
+
+            return false;
+        }
+    }
+
+    pub fn get_var_ptr(&mut self, var_id: &str) -> u64 {
+        if self.vars.contains_key(var_id) { 
+            return self.vars.get(var_id).unwrap() as *const Var as u64;  }
+
+        if self.parent_p == 0 { error(&format!("Could not resolve {} as it does not exist", var_id)); }
+        unsafe {
+            let env_p = self.parent_p as *mut Env;
             let env = &mut *env_p;
 
-            return env.contains_var(var_id);
+            return env.get_var_ptr(var_id);
         }
     }
 }
@@ -300,16 +386,16 @@ impl Env {
 pub fn cast(data: RuntimeValue, typ: DataType) -> RuntimeValue {
     use RuntimeValue::*;
     
-    match (data, typ) {
+    match (data.clone(), typ.clone()) {
         (Int(_), DataType::Int) => data,
         (Float(_), DataType::Float) => data,
         (Char(_), DataType::Char) => data,
         (Bool(_), DataType::Bool) => data,
         (Object{..}, DataType::Object(_)) if data.get_type() == typ => data,
-        (Array{data_type}, DataType::Array(_)) if data_typ == typ => data,
+        (Array{data_type,..}, DataType::Array(_)) if data_type == typ => data,
 
         (Int(i), DataType::Float) => Float(i as f64),
-        (Int(i), DataType::Char) => Char(i as char),
+        (Int(i), DataType::Char) if i >= 0 => Char(i as u8 as char),
 
         (Float(f), DataType::Int) => Int(f as i32),
         (Char(c), DataType::Int) => Int(c as i32),
@@ -317,6 +403,9 @@ pub fn cast(data: RuntimeValue, typ: DataType) -> RuntimeValue {
         _ => { error("Invalid cast"); return RuntimeValue::Void; }
     }
 }
+
+
+
 
 
 
