@@ -153,6 +153,8 @@ pub fn tokenize(src: &str) -> Vec<Token> {
     let mut next = true;
     loop {
         if next { c = if let Some(c) = chars.next() { c } else { break; }; }
+        //println!("{}",c);    
+        
 
         if c == '\'' {
             c = if let Some(c) = chars.next() { c } else { break; };
