@@ -5,7 +5,7 @@
 
 
 use std::collections::{HashMap, LinkedList};
-use std::env;
+use std::{env, mem};
 use std::slice::Iter;
 use std::sync::{Mutex, Arc};
 
@@ -309,12 +309,105 @@ impl Program {
             AstNode::AdvanceAssignment { id, data } => {
                 let id = *id;
                 let data = self.eval_rt_value(*data);
-                        p_val = (p_par, Some(mem));
-                    },
-                    
+                let rtrn = data.clone();
+                enum CallType {
+                    Id, 
+                    Array(usize), 
+                }
+
+                let (value, call_type) = if let AstNode::MemberCall { parent, member } = id { unsafe {
+                    let (p_par, mem) = self.eval_member(*parent, *member);
+                    let par = &mut *p_par;
+
+                    let (name, props) = if let Object { name, properties } = par {
+                        (name, properties)
+                    } else { 
+                        error(&format!("Only object types can have members, type {} is not an object.",
+                                par.get_type())); 
+                        return Void;
+                    };
+
+                    let (id, call_type) = match mem {
+                        AstNode::Identifier(name) => (name, CallType::Id), 
+                        AstNode::ArrayCall{id, index} => {
+                            let index = self.eval_rt_value(
+                                *index.unwrap_or(Box::new(AstNode::Void))
+                            );
+                            let id = if let AstNode::Identifier(id) = *id { id.to_string() } else {
+                                error("Extpected identfier");
+                                return Void;
+                            };
+
+                            if index.get_type() != DataType::Int { error(&format!(
+                                    "ArrayCall expected type Int but found {}", index.get_type())); }
+
+                            let i = index.get_int_or_float().int;
+                            (id, CallType::Array(i as usize))
+                        }, 
+
+                        _ => { error("Invalid call type"); return Void; }, 
+                    };
+
+                    let member = props
+                        .get_mut(&id)
+                        .unwrap_or_else(|| panic!("Member {} not found on {}", id, name));
+
+                    (member as *mut RuntimeValue, call_type) 
+                }} else if let AstNode::ArrayCall{id, index} = id { unsafe {
+                    let id = if let AstNode::Identifier(id) = *id { id }
+                    else { error("Expected identfier"); return Void; };
+
+                    let var = self.env
+                        .lock()
+                        .unwrap()
+                        .get_var_ref(&id);
+
+                    let rt = &mut var
+                        .as_ref()
+                        .lock()
+                        .unwrap()
+                        .value;
+
+                    let index = self.eval_rt_value(
+                        *index.unwrap_or(Box::new(AstNode::Void))
+                    );
+
+                    if index.get_type() != DataType::Int { error(&format!(
+                            "ArrayCall expected type Int but found {}", index.get_type())); }
+
+                    let i = index.get_int_or_float().int;
+                    (rt as *mut RuntimeValue, CallType::Array(i as usize))
+                }} else { error("Something went wrong while interpreting AdvanceAssignment"); return Void; };
+
+                match call_type {
+                    CallType::Id => unsafe {
+                        let value = &mut *value;
+                        if value.get_type() != data.get_type() {
+                            error(&format!("Expected type {} but found {}", value.get_type(), data.get_type()));
+                            return Void;
+                        }
+                        let _ = mem::replace(value, data);
+                    }, 
+                    CallType::Array(i) => unsafe {
+                        let value = &mut *value;
+                        let (len, arr) = if let Array {length, arr,..} = value {
+                            (length, arr)
+                        } else { error("this shouldnt happen"); return Void; };
+
+                        let e = arr
+                            .get_mut(i)
+                            .unwrap_or_else(|| panic!("Array index out of bounds, len was {} but index was {}", len, i));
+
+                        if e.get_type() != data.get_type() {
+                            error(&format!("Expected type {} but found {}", e.get_type(), data.get_type()));
+                            return Void;
+                        }
+
+                        let _ = mem::replace(e, data);
+                    }
                 }
                 
-                todo!()
+                return rtrn;
             },
             
 

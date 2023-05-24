@@ -126,11 +126,14 @@ impl RuntimeValue {
             Object { name, ..} => DataType::Object(name.to_string()),
             Array { data_type, ..} => DataType::Array(Box::new(data_type.clone())),
             Function { id, ..} => DataType::Function(id.to_string()),
-            Struct { id, ..} => DataType::Struct,
+            Struct {..} => DataType::Struct,
             Break | Continue | Void => DataType::Void,
             TypeSpecifier(data_type) => data_type.clone(),
             Return(node) => (*node).get_type(),
-            Call {..} => DataType::Void,
+            Call {kind,..} => match kind {
+                ScopeKind::Function {rtrn_t,..} => rtrn_t.clone(),
+                _ => DataType::Void 
+            },
             VarReferance(ptr) => {
                 let var = ptr.lock().unwrap();
                 var.d_type.clone()

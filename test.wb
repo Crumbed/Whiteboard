@@ -29,4 +29,6 @@ struct Person {
 
 
 
-kai.name.length
+kai.name = str("test")
+
+kai.name
