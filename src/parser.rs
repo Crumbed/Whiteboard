@@ -31,6 +31,9 @@ pub enum AstNode {
     ArrayCall { id: Box<AstNode>, index: Option<Box<AstNode>> },
 
     FunctionCall { id: Box<AstNode>, params: Vec<AstNode> }, 
+    WhileLoop { condition: Box<AstNode>, body: Box<AstNode> },
+    Break,
+    Continue,
     WriteExpr { data: Box<AstNode> },
     Return(Box<AstNode>),
 
@@ -60,10 +63,11 @@ impl ProgramAST {
         let mut node = ast.parse_keyword();
         ast.nodes.push(node);
         while ast.has_next() {
-            let tkn = ast.next();
+            ast.next();
+            //println!("{:?}", ast.at());
             node = ast.parse_keyword();
             //println!("{:#?}", node);
-            ast.nodes.push(node);
+            ast.nodes.push(node.clone());
         }
 
         return ast;
@@ -146,6 +150,7 @@ impl ProgramAST {
 
                 let body = self.parse_block();
 
+                //println!("{:?}", self.at());
                 return AstNode::FunctionDeclaration {
                     id, args, rtrn_typ: return_type, body: Box::new(body) };
             },
@@ -160,8 +165,11 @@ impl ProgramAST {
                 self.check_next("Expected block after condition");
                 let body = self.parse_block();
 
+                //println!("{:#?}", self.at());
+                
                 if self.has_next() && self.get_next().value() == "else" {
                     self.next();
+                    //println!("else detected {:#?}", self.at());
                     let else_expr = self.parse_keyword();
                     return AstNode::IfChain { 
                         condition: Box::new(condition),
@@ -169,6 +177,7 @@ impl ProgramAST {
                         else_do: Some(Box::new(else_expr)) 
                     };
                 } 
+                
 
                 return AstNode::IfChain { 
                     condition: Box::new(condition),
@@ -176,9 +185,29 @@ impl ProgramAST {
                     else_do: None 
                 };
             },
+            Identifier(id) if &id[..] == "while" => {
+                self.check_next("Expected condition after while");
+                let condition = self.parse_assignment();
+
+                if let AstNode::ConditionChain {..} | AstNode::Condition {..} = condition
+                {} else { error("Expected condition after while"); }
+
+                self.check_next("Expected block after condition");
+                let body = self.parse_block();
+
+                return AstNode::WhileLoop { 
+                    condition: Box::new(condition), 
+                    body: Box::new(body) 
+                };
+            },
+            
             Identifier(id) if &id[..] == "else" => {
                 self.check_next("Expected if or block after else");
-                if self.at() == &(Brace{open: true}) { return self.parse_block(); }
+                if self.at() == &(Brace{open: true}) { 
+                    let block = self.parse_block(); 
+                    //if self.has_next() { self.next(); }
+                    return block;
+                }
                 if self.at().value() != "if" { error("Expected id or block after else"); }
 
                 return self.parse_keyword();
@@ -192,9 +221,9 @@ impl ProgramAST {
                 self.check_next("Expected TYPE IDENTIFIER");
                 let mut props = vec![];
                 while self.at() != &(Brace{open: false}) {
-                    let node1 = self.parse_primary();
+                    let node1 = self.parse_assignment();
                     self.check_next("Expected identifier");
-                    let node2 = self.parse_primary();
+                    let node2 = self.parse_assignment();
 
                     props.push((node1, node2));
 
@@ -204,12 +233,15 @@ impl ProgramAST {
 
                 return AstNode::StructDeclaration { id, properties: props };
             },
+            
             Identifier(id) if &id[..] == "return" => {
                 self.check_next("Expected return value\n    HINT: if this was an early return to a void function, then replace this with \'return void\'");
 
                 let data = self.parse_assignment();
                 return AstNode::Return(Box::new(data));
             },
+            Identifier(id) if &id[..] == "break" => AstNode::Break,
+            Identifier(id) if &id[..] == "continue" => AstNode::Continue,
 
             _ => self.parse_assignment()
         }
@@ -218,14 +250,20 @@ impl ProgramAST {
     fn parse_block(&mut self) -> AstNode {
         use Token::*;
         if self.at() != &(Brace {open: true}) { return self.parse_assignment(); }
-        self.check_next("Expected block body");
+        if !self.has_next() { error("Expected block body"); }
 
         let mut body = vec![];
-        while self.at() != &(Brace {open: false}) {
+        while self.next() != &(Brace {open: false}) {
+            //println!("{:?}", self.at());
             let node = self.parse_keyword();
-            body.push(node);
-            self.check_next("Expected ClosingBrace");
+            //println!("{:?}", self.at());
+            //println!("{:?}", node);
+            body.push(node.clone());
+            //if self.has_next() && self.at() == &(Brace{open: false}) { self.next(); }
+            if !self.has_next() { error("Expected ClosingBrace"); }
         }
+
+        //println!("{:?}", body);
         return AstNode::Block(body);
     }
     fn parse_assignment(&mut self) -> AstNode {
@@ -283,7 +321,7 @@ impl ProgramAST {
         let values = self.parse_csvs();
         if self.at() != &(Bracket{open: false}) { error("Expected ClosingBracket"); }
 
-        if self.has_next() { self.next(); }
+        //if self.has_next() { self.next(); }
         return AstNode::ArrayLiteral { type_id: None, size: None, list: values };
     }
     fn parse_object(&mut self) -> AstNode {
@@ -291,8 +329,8 @@ impl ProgramAST {
         let id = if self.at() == &(Identifier("".to_string())) {
             let id = self.parse_condition_chain();
             if let AstNode::Identifier(_) = id {
-                if !self.has_next() { return id; } else { self.next(); }
-                if self.at() != &(Brace {open: true}) { self.last(); return id; }
+                if !self.has_next() { return id; } 
+                if self.next() != &(Brace {open: true}) { self.last(); return id; }
                 id
             } else { return id; }
         } else { AstNode::Void };
@@ -407,7 +445,7 @@ impl ProgramAST {
                 };
             }
             extra_op = true;
-            if self.has_next() { self.next(); }
+            if self.has_next() && (self.at().value() == "+" || self.at().value() == "-" ) { self.next(); }
         }
 
         if let AstNode::Void = node { self.last(); return left; }
@@ -438,7 +476,7 @@ impl ProgramAST {
                 };
             }
             extra_op = true;
-            if self.has_next() { self.next(); }
+            if self.has_next() && (self.at().value() == "*" || self.at().value() == "/" ) { self.next(); }
         }
 
         if let AstNode::Void = node { self.last(); return left; }
@@ -454,7 +492,7 @@ impl ProgramAST {
     fn parse_call(&mut self) -> AstNode {
         use Token::*;
         let id = self.parse_array_call();
-        if !self.has_last() || self.get_last() != &(Identifier(String::new())) { return id; }
+        if self.at() != &(Identifier(String::new())) { return id; }
         if !self.has_next() || self.get_next() != &(Paren{open: true}) { return id; } else { self.next(); }
 
         self.check_next("Expected arguments or ClosingParen");
@@ -462,17 +500,20 @@ impl ProgramAST {
             return AstNode::FunctionCall { id: Box::new(id), params: vec![] }; }
 
         let args = self.parse_csvs();
-        self.expect(Paren{open: false}, "Exepcted ClosingParen");
+        if self.at() != &(Paren{open: false}) {
+            self.expect(Paren{open: false}, "Exepcted ClosingParen"); }
         return AstNode::FunctionCall { id: Box::new(id), params: args };
     }
     fn parse_array_call(&mut self) -> AstNode {
         let id = self.parse_member();
+        //println!("{:?}", id);
         if !self.has_next() || self.get_next() != &(Token::Bracket{open: true}) { return id; }
         self.next();
+        //println!("{:?} passed, next is {:?}", id, self.get_next());
     
         self.check_next("Expected ClosingBracket or index");
         if self.at() == &(Token::Bracket{open: false}) {
-            if self.has_next() { self.next(); }
+            //println!("TYPE");
             return AstNode::ArrayCall{id: Box::new(id), index: None};
         }
 
@@ -536,15 +577,15 @@ impl ProgramAST {
         use Token::*;
         let mut val = self.parse_assignment();
         let mut csvs = vec![val];
-        if !self.has_next() || self.next() != &Comma { return csvs; }
+        if !self.has_next() || self.get_next() != &Comma { return csvs; }
         
-        while self.at() == &Comma {
+        while self.next() == &Comma {
             if self.next() == &(Bracket{open: false}) || self.at() == &(Paren{open: false}) { 
                 return csvs; }
             val = self.parse_assignment();
             csvs.push(val);
 
-            if !self.has_next() { return csvs; } else { self.next(); }
+            if !self.has_next() { return csvs; }
         }
 
         return csvs;

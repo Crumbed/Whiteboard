@@ -16,7 +16,7 @@ mod interpreter;
 
 use std::{io::{self, Write }, process, collections::HashMap};
 
-use crate::{parser::ProgramAST, runtime::Env, interpreter::{Program, VAR_LITERALS}};
+use crate::{parser::ProgramAST, runtime::Env, interpreter::Program};
 
 
 
@@ -27,9 +27,6 @@ use crate::{parser::ProgramAST, runtime::Env, interpreter::{Program, VAR_LITERAL
 fn main() -> io::Result<()>{
     let mut input = String::new();
     let args: Vec<String> = std::env::args().collect();
-    unsafe {
-        VAR_LITERALS = Some(HashMap::new());
-    }
 
 
     // If the user provides a file to run
@@ -44,12 +41,12 @@ fn main() -> io::Result<()>{
         let tokens = lexer::tokenize(&(src + "\n"));
         //println!("{:#?}", tokens);
         let ast = ProgramAST::parse(tokens);
-        println!("{:#?}", ast.nodes);
+        //println!("{:#?}", ast.nodes);
         let mut prgm = Program::new(
             Env::new(None, runtime::ScopeKind::Program)
         );
         let last = prgm.eval_ast(ast);
-        println!("{:#?}", last);
+        println!("{}", last);
         
         return Ok(());
     }

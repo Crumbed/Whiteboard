@@ -1,5 +1,7 @@
 use std::str::Chars;
 
+use crate::error;
+
 
 
 
@@ -154,7 +156,14 @@ pub fn tokenize(src: &str) -> Vec<Token> {
     loop {
         if next { c = if let Some(c) = chars.next() { c } else { break; }; }
         //println!("{}",c);    
-        
+
+        if c == '"' {
+            c = if let Some(c) = chars.next() { c } else { break; };
+            let (ch, mut str) = lex_char_arr(&mut chars, c);
+            c = ch;
+            tokens.append(&mut str);
+            next = true; continue;
+        }
 
         if c == '\'' {
             c = if let Some(c) = chars.next() { c } else { break; };
@@ -253,6 +262,17 @@ pub fn tokenize(src: &str) -> Vec<Token> {
     return new_tkns;
 }
 
+fn lex_char_arr(chars: &mut Chars, mut c: char) -> (char, Vec<Token>) {
+    let mut str = vec![Token::Bracket { open: true }];
+    while c != '"' {
+        str.push(Token::Char(c.to_string()));
+        str.push(Token::Comma);
+        c = if let Some(c) = chars.next() { c } else { error("Unclosed \" while parsing str"); break; }
+    }
+    str.push(Token::Bracket { open: false });
+
+    return (c, str);
+}
 fn lex_identifier(chars: &mut Chars, mut c: char) -> (char, Token) { 
     let mut id = String::new();
     while !ID_BREAK.contains(&c) {

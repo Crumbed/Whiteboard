@@ -1,0 +1,32 @@
+
+
+
+
+struct String {
+    char[] chars,
+    int length
+}
+fn str(char[] s) : String {
+    return String {
+        chars: s,
+        length: len(s)
+    }
+}
+
+
+struct Person {
+    String name,
+    int age
+}
+
+: kai = Person {
+    name: String {
+        chars: "kai",
+        length: 3
+    },
+    age: 17
+}
+
+
+
+kai.name.length
