@@ -25,7 +25,7 @@ pub enum AstNode {
     Identifier(String),
     Literal(TypeKind, String),
 
-    ArrayLiteral { type_id: Option<String>, size: Option<Box<AstNode>>, list: Vec<AstNode> },
+    ArrayLiteral { type_id: Option<Box<AstNode>>, size: Option<Box<AstNode>>, list: Vec<AstNode> },
     ObjectLiteral { type_id: Option<String>, members: HashMap<String, AstNode> }, 
     MemberCall { parent: Box<AstNode>, member: Box<AstNode> },
     ArrayCall { id: Box<AstNode>, index: Option<Box<AstNode>> },
@@ -306,17 +306,24 @@ impl ProgramAST {
                 list: vec![]
             };
         }
-        // THIS MAY CAUSE A PROBLEM
-        //else if let AstNode::Identifier(name) = self.parse_object() {
-        //    self.expect(Endline, "Expected Semicolon");
-        //    self.check_next("Expected array length");
-        //    let size = self.parse_object();
-        //
-        //    self.expect(Bracket{open: false}, "Expected ClosingBracket");
-        //    return AstNode::ArrayLiteral{ 
-        //        type_id: Some(name.to_string()), size: Some(Box::new(size)), list: vec![] };
-        //}
 
+        let obj = self.parse_object();
+        if let AstNode::ArrayCall{..} | AstNode::Identifier(..) = obj {
+            self.check_next("Expected data or ClosingBracket");
+            if self.at() == &Endline {
+                self.check_next("Expected array size");
+                let size = self.parse_object();
+
+                self.expect(Bracket{open: false}, "Expected ClosingBracket");
+                return AstNode::ArrayLiteral { 
+                    type_id: Some(Box::new(obj)),
+                    size: Some(Box::new(size)),
+                    list: vec![AstNode::Void]
+                };
+            } else {
+                self.last();
+            }
+        }
         
         let values = self.parse_csvs();
         if self.at() != &(Bracket{open: false}) { error("Expected ClosingBracket"); }

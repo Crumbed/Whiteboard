@@ -1,34 +1,16 @@
 
-
-
-
 struct String {
     char[] chars,
-    int length
+    int size
 }
+
 fn str(char[] s) : String {
     return String {
-        chars: s,
-        length: len(s)
+        chars : s,
+        size : len(s)
     }
 }
 
-
-struct Person {
-    String name,
-    int age
-}
-
-: kai = Person {
-    name: String {
-        chars: "kai",
-        length: 3
-    },
-    age: 17
-}
+String[] : strs = [String; 2]
 
 
-
-kai.name = str("test")
-
-kai.name

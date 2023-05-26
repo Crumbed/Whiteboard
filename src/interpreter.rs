@@ -59,6 +59,7 @@ impl Program {
             println!("{:#?}", node);
             let mut rt_val = self.eval_rt_value(node.clone());
             self.last_val = rt_val.clone();
+            println!("last val {:#?}", self.last_val);
             //println!("{:?}\n", self.env.lock().unwrap().kind);
 
 
@@ -149,7 +150,7 @@ impl Program {
                                 self.eval_rt_value(node.clone())
                             };
 
-                            if value.get_type() != args[i].0 { error(&format!(
+                            if args[i].0 != DataType::Void && value.get_type() != args[i].0 { error(&format!(
                                 "function expected type {} but found {}", args[i].0, value.get_type()));}
 
                             env.declare_var(&args[i].1, &value);
@@ -242,6 +243,7 @@ impl Program {
             //println!("{}", node_counts[self.env_stack.len()-1]);
         }
 
+        println!("{:#?}", self.last_node);
         return self.last_val.clone();
     }
 
@@ -315,58 +317,89 @@ impl Program {
                     Array(usize), 
                 }
 
-                let (value, call_type) = if let AstNode::MemberCall { parent, member } = id { unsafe {
+                        //AstNode::ArrayCall{id, index} => {
+                        //    let index = self.eval_rt_value(
+                        //        *index.unwrap_or(Box::new(AstNode::Void))
+                        //    );
+                        //    let id = if let AstNode::Identifier(id) = *id { id.to_string() } else {
+                        //        error("Extpected identfier");
+                        //        return Void;
+                        //    };
+//
+                        //    if index.get_type() != DataType::Int { error(&format!(
+                        //            "ArrayCall expected type Int but found {}", index.get_type())); }
+//
+                        //    let i = index.get_int_or_float().int;
+                        //    (id, CallType::Array(i as usize))
+                        //}, 
+                
+
+                let (value, call_type) = if let AstNode::MemberCall { parent, member } = id {unsafe {
                     let (p_par, mem) = self.eval_member(*parent, *member);
                     let par = &mut *p_par;
 
                     let (name, props) = if let Object { name, properties } = par {
                         (name, properties)
                     } else { 
-                        error(&format!("Only object types can have members, type {} is not an object.",
-                                par.get_type())); 
+                        error(&format!(
+                            "Only object types can have members, type {} is not an object.",
+                            par.get_type())); 
+
                         return Void;
                     };
 
-                    let (id, call_type) = match mem {
-                        AstNode::Identifier(name) => (name, CallType::Id), 
-                        AstNode::ArrayCall{id, index} => {
-                            let index = self.eval_rt_value(
-                                *index.unwrap_or(Box::new(AstNode::Void))
-                            );
-                            let id = if let AstNode::Identifier(id) = *id { id.to_string() } else {
-                                error("Extpected identfier");
-                                return Void;
-                            };
-
-                            if index.get_type() != DataType::Int { error(&format!(
-                                    "ArrayCall expected type Int but found {}", index.get_type())); }
-
-                            let i = index.get_int_or_float().int;
-                            (id, CallType::Array(i as usize))
-                        }, 
-
-                        _ => { error("Invalid call type"); return Void; }, 
+                    let id = if let AstNode::Identifier(name) = mem { name } else {
+                        error("Invalid call type"); return Void;
                     };
+
 
                     let member = props
                         .get_mut(&id)
                         .unwrap_or_else(|| panic!("Member {} not found on {}", id, name));
 
-                    (member as *mut RuntimeValue, call_type) 
-                }} else if let AstNode::ArrayCall{id, index} = id { unsafe {
-                    let id = if let AstNode::Identifier(id) = *id { id }
-                    else { error("Expected identfier"); return Void; };
+                    (member as *mut RuntimeValue, CallType::Id) 
+                }} 
+                else if let AstNode::ArrayCall{id, index} = id { unsafe {
+                    //let id = if let AstNode::Identifier(id) = *id { id }
+                    //else { println!("test"); error("Expected identfier"); return Void; };
 
-                    let var = self.env
-                        .lock()
-                        .unwrap()
-                        .get_var_ref(&id);
+                    let arr = match *id {
+                        AstNode::Identifier(id) => {
+                            let var_arc = self.env
+                                .lock()
+                                .unwrap()
+                                .get_var_ref(&id);
+                            let mut var = var_arc.lock().unwrap();
 
-                    let rt = &mut var
-                        .as_ref()
-                        .lock()
-                        .unwrap()
-                        .value;
+                            &mut var.value as *mut RuntimeValue
+                        },
+
+                        AstNode::MemberCall{parent, member} => unsafe {
+                            let (p_par, mem) = self.eval_member(*parent, *member);
+                            let par = &mut *p_par;
+
+                            let (name, props) = if let Object { name, properties } = par {
+                                (name, properties)
+                            } else { 
+                                error(&format!(
+                                    "Only object types can have members, type {} is not an object.",
+                                    par.get_type())); 
+
+                                return Void;
+                            };
+
+                            let id = if let AstNode::Identifier(name) = mem { name } else {
+                                error("Invalid call type"); return Void;
+                            };
+                            let mut member = props
+                                .get_mut(&id)
+                                .unwrap_or_else(|| panic!("Member {} not found on {}", id, name));
+
+                            member as *mut RuntimeValue
+                        },
+
+                        _ => { error("Invalid array call"); return Void; } 
+                    };
 
                     let index = self.eval_rt_value(
                         *index.unwrap_or(Box::new(AstNode::Void))
@@ -376,13 +409,14 @@ impl Program {
                             "ArrayCall expected type Int but found {}", index.get_type())); }
 
                     let i = index.get_int_or_float().int;
-                    (rt as *mut RuntimeValue, CallType::Array(i as usize))
+                    (arr, CallType::Array(i as usize))
                 }} else { error("Something went wrong while interpreting AdvanceAssignment"); return Void; };
 
                 match call_type {
                     CallType::Id => unsafe {
                         let value = &mut *value;
-                        if value.get_type() != data.get_type() {
+                        if DataType::Void != value.get_type() 
+                            && value.get_type() != data.get_type() {
                             error(&format!("Expected type {} but found {}", value.get_type(), data.get_type()));
                             return Void;
                         }
@@ -390,20 +424,21 @@ impl Program {
                     }, 
                     CallType::Array(i) => unsafe {
                         let value = &mut *value;
-                        let (len, arr) = if let Array {length, arr,..} = value {
-                            (length, arr)
+                        let (typ, len, arr) = if let Array {data_type, length, arr} = value {
+                            (data_type, length, arr)
                         } else { error("this shouldnt happen"); return Void; };
-
-                        let e = arr
-                            .get_mut(i)
-                            .unwrap_or_else(|| panic!("Array index out of bounds, len was {} but index was {}", len, i));
-
-                        if e.get_type() != data.get_type() {
-                            error(&format!("Expected type {} but found {}", e.get_type(), data.get_type()));
+                        
+                        if i >= *len { error(&format!(
+                            "Array index out of bounds, len was {} but index was {}", len, i)); }
+                        
+                        if *typ != DataType::Array(Box::new(DataType::Void)) 
+                            && *typ != DataType::Void && *typ != data.get_type() {
+                            println!("{}", *typ);
+                            error(&format!("Expected type {} but found {}", typ, data.get_type()));
                             return Void;
                         }
 
-                        let _ = mem::replace(e, data);
+                        arr[i] = data;
                     }
                 }
                 
@@ -577,24 +612,15 @@ impl Program {
             AstNode::ArrayLiteral { type_id, size, list } => {
                 let d_type: DataType;
                 if type_id.is_some() {
-                    let type_id = type_id.unwrap();
-                    d_type = match &type_id[..] {
-                        "int" => DataType::Int, 
-                        "float" => DataType::Float, 
-                        "char" => DataType::Char, 
-                        "bool" => DataType::Bool, 
-                        "Object" => DataType::Object("Object".to_string()), 
-                        _ => {
-                            if !self.env
-                                .lock()
-                                .unwrap()
-                                .contains_var(&format!("s:{}", type_id)) {
-                                
-                                error(&format!("{} is not a valid type", type_id));
-                            }
-
-                            DataType::Object(type_id.to_string())
-                        },
+                    let type_id = *type_id.unwrap();
+                    let rt_type = self.eval_rt_value(type_id);
+                    if let TypeSpecifier(_) | Struct {..} = rt_type {
+                        d_type = if let Struct {id,..} = rt_type {
+                            DataType::Object(id)
+                        } else { rt_type.get_type() };
+                    } else {
+                        error(&format!("{} is not a valid type", rt_type));
+                        d_type = DataType::Void;
                     }
                 } else { d_type = DataType::Void; }
 
@@ -637,6 +663,7 @@ impl Program {
                     "float" => TypeSpecifier(DataType::Array(Box::new(DataType::Float))),
                     "bool" => TypeSpecifier(DataType::Array(Box::new(DataType::Bool))),
                     "char" => TypeSpecifier(DataType::Array(Box::new(DataType::Char))),
+                    "void" => TypeSpecifier(DataType::Array(Box::new(DataType::Void))),
                     "Object" => TypeSpecifier(
                         DataType::Array(Box::new(DataType::Object(String::from("Object"))))),
                     _ => {
@@ -739,7 +766,11 @@ impl Program {
         }
     }
 
-    unsafe fn eval_member(&mut self, parent: AstNode, member: AstNode) -> (*mut RuntimeValue, AstNode) {
+    unsafe fn eval_member(
+        &mut self,
+        parent: AstNode,
+        member: AstNode
+    ) -> (*mut RuntimeValue, AstNode) {
         use RuntimeValue::*;
         let mut p_par = if let AstNode::Identifier(id) = parent.clone() {
             let arc_var = self.env
@@ -748,7 +779,15 @@ impl Program {
                 .get_var_ref(&id);
             let mut var = arc_var.lock().unwrap();
 
-            &mut var.value as *mut RuntimeValue
+            if let RuntimeValue::VarReferance(arc) = &var.value {
+                let mut var = arc
+                    .lock()
+                    .unwrap();
+
+                &mut var.value as *mut RuntimeValue
+            } else {
+                &mut var.value as *mut RuntimeValue
+            }
         } else {
             &mut self.eval_rt_value(parent) as *mut RuntimeValue };
 
@@ -956,8 +995,8 @@ impl Program {
         size: Option<Box<AstNode>>,
         list: Vec<AstNode>
     ) -> RuntimeValue {
-        if typ != DataType::Void {
-            let size = self.eval_rt_value(*size.unwrap());
+        if let Some(size) = size {
+            let size = self.eval_rt_value(*size);
 
             let size_int = if let RuntimeValue::Int(v) = size { v } else {
                 error("Array size exepcted int type");
@@ -969,7 +1008,7 @@ impl Program {
             return RuntimeValue::Array {
                 data_type: typ,
                 length: size_int as usize,
-                arr: Vec::with_capacity(size_int as usize)
+                arr: vec![RuntimeValue::Void; size_int as usize]
             };
         }
 
@@ -1014,8 +1053,10 @@ impl Program {
             for (prop_id, data) in properties {
                 let rt = self.eval_rt_value(data);
 
-                if !props.contains(&(rt.get_type(), prop_id.clone())) { error(&format!(
-                    "{} does not have property {} of type {}", id, prop_id, rt.get_type())); }
+                if !props.contains(&(DataType::Void, prop_id.clone()))  && !props.contains(&(rt.get_type(), prop_id.clone()))  && !props.contains(&(DataType::Array(Box::new(DataType::Void)), prop_id.clone())) { 
+                    error(&format!(
+                        "{} does not have property {} of type {}", id, prop_id, rt.get_type())); 
+                }
 
                 obj_props.insert(prop_id, rt);
             }

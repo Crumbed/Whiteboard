@@ -276,7 +276,7 @@ impl Env {
     pub fn declare_var(&mut self, var_id: &str, var_data: &RuntimeValue) {
         if self.vars.contains_key(var_id) { error(&format!(
             "Cannot declare {}, as it already exists", var_id )); }
-        if ["int", "float", "bool", "char", "Object",].contains(&var_id) { error(&format!(
+        if ["int", "float", "bool", "char", "void", "Object",].contains(&var_id) { error(&format!(
             "cannot declare {} as it is a reserved type specifier", var_id)); }
 
         let d_type = if let RuntimeValue::VarReferance(_) = var_data {
@@ -293,7 +293,8 @@ impl Env {
         };
 
         self.vars.insert(var_id.to_string(), Arc::new(Mutex::new(var)));
-        //println!("{:#?}", self.vars);
+        //println!("parent: {:#?}, vars: {:#?}", self.parent_p, self.vars);
+        //println!("vars: {:#?}", self.vars);
     }
     pub fn assign_var(&mut self, var_id: &str, var_data: &RuntimeValue) {
         if self.vars.contains_key(var_id) {
@@ -304,9 +305,26 @@ impl Env {
                 .unwrap();
 
 
-            let var_type = if let DataType::Ref(typ) = &var.d_type { *typ.clone() }
-            else { var.d_type.clone() };
+            let var_type = if let DataType::Ref(typ) = &var.d_type {
+                let mut typ = *typ.clone();
+                if typ == DataType::Void {
+                    var.d_type = DataType::Ref(Box::new(var_data.get_type()));
+                    typ = var_data.get_type();
+                }
+
+                typ
+            }
+            else {
+                let mut typ = var.d_type.clone();
+                if typ == DataType::Void {
+                    var.d_type = var_data.get_type();
+                    typ = var_data.get_type();
+                }
+
+                typ
+            };
             
+
             if var_type != var_data.get_type() { error(&format!(
                 "Incompatible types {} and {}, {} expected type {}", 
                 var_type, var_data.get_type(), var_id, var_type
@@ -324,7 +342,7 @@ impl Env {
             
             return;
         }
-        if ["int", "float", "bool", "char", "Object"].contains(&var_id) { error(&format!(
+        if ["int", "float", "bool", "char", "void", "Object"].contains(&var_id) { error(&format!(
             "cannot assign {} as it is a reserved type specifier", var_id)); }
 
         if self.parent_p.is_none() { error(&format!("Could not resolve {} as it does not exist", var_id));}
@@ -337,6 +355,7 @@ impl Env {
         env.assign_var(var_id, var_data);
     }
     pub fn get_var(&mut self, var_id: &str) -> RuntimeValue {
+        //println!("parent: {:#?}, vars: {:#?}", self.parent_p, self.vars);
         if self.vars.contains_key(var_id) { 
             return self.vars
                 .get(var_id)
@@ -350,6 +369,7 @@ impl Env {
             "float" => return RuntimeValue::TypeSpecifier(DataType::Float),
             "char" => return RuntimeValue::TypeSpecifier(DataType::Char),
             "bool" => return RuntimeValue::TypeSpecifier(DataType::Bool),
+            "void" => return RuntimeValue::TypeSpecifier(DataType::Void),
             "Object" => return RuntimeValue::TypeSpecifier(DataType::Object("Object".to_string())),
             _ => (),
         }
@@ -377,7 +397,7 @@ impl Env {
     }
     pub fn contains_var(&self, var_id: &str) -> bool {
         if self.vars.contains_key(var_id) { return true; }
-        if ["int", "float", "bool", "char", "Object"].contains(&var_id) { return true; }
+        if ["int", "float", "bool", "char", "void", "Object"].contains(&var_id) { return true; }
 
         // changed from recursive calls to iterative because of stack overflow errors
         let mut par_p = self.parent_p.clone();
@@ -404,6 +424,8 @@ impl Env {
             .lock()
             .unwrap();
 
+
+        //println!("id: {}, vars: {:#?}", self.id, self.vars);
         return env.get_var_ref(var_id);
     }
 
@@ -483,7 +505,6 @@ pub fn cast(data: RuntimeValue, typ: DataType) -> RuntimeValue {
         _ => { error("Invalid cast"); return RuntimeValue::Void; }
     }
 }
-
 
 
 
